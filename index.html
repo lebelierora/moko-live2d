@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>モコのお店案内（Live2D風 試作）</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; }
+  body {
+    font-family: "Hiragino Maru Gothic ProN", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    background: #faf3e6;
+    color: #4a3f35;
+    display: flex; flex-direction: column; align-items: center;
+    height: 100dvh; overflow: hidden;
+    touch-action: manipulation;
+    padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
+  }
+  .stage {
+    flex: 1 1 auto; width: 100%; max-width: 430px;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 0; padding-top: 8px;
+  }
+  .char-wrap {
+    position: relative; height: 100%; max-height: 100%;
+    aspect-ratio: 600 / 740;
+    border-radius: 18px;
+    box-shadow: 0 8px 28px rgba(120, 95, 60, .18);
+    overflow: hidden;
+    background: #fbf4e8;
+  }
+  canvas { width: 100%; height: 100%; display: block; }
+  .bubble {
+    flex: 0 0 auto; width: 100%; max-width: 430px;
+    background: #fff; border: 2px solid #e8dcc8; border-radius: 16px;
+    padding: 10px 14px; margin: 8px 0 10px;
+    min-height: 70px;
+    display: flex; align-items: center; justify-content: center;
+    text-align: center;
+  }
+  .bubble p { font-size: 15.5px; line-height: 1.6; }
+  .bubble p.idle { color: #a08b74; font-size: 14.5px; }
+  .topics {
+    flex: 0 0 auto; width: 100%; max-width: 430px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    padding-bottom: 6px;
+  }
+  .topics button {
+    padding: 13px 6px; font-size: 15.5px; font-weight: 700;
+    font-family: inherit; color: #fff; background: #8a9a5b;
+    border: none; border-radius: 14px; cursor: pointer;
+  }
+  .topics button:active { transform: scale(.97); }
+  .topics button.playing { background: #b08968; }
+  .note { flex: 0 0 auto; text-align: center; font-size: 12px; color: #b3a28c; padding-bottom: 10px; }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="char-wrap">
+      <canvas id="cv" width="600" height="740"></canvas>
+    </div>
+  </div>
+  <div class="bubble"><p id="line" class="idle">聞きたい項目を押すと、モコが説明します（Live2D風の試作です）</p></div>
+  <div class="topics" id="topics"></div>
+  <div class="note">開いている間だけの試作です。音が出ます。</div>
+<script>
+(function(){
+  var W = 600, H = 740;
+  var cv = document.getElementById('cv');
+  var ctx = cv.getContext('2d');
+  var lineEl = document.getElementById('line');
+  var topicsEl = document.getElementById('topics');
+
+  // ---- 画像素材（全部同じ顔の幾何で揃えた合成済み） ----
+  var SRC = {
+    base: 'base.jpg', blink: 'blink.jpg', smile: 'smile.jpg',
+    mouth1: 'mouth1.jpg', mouth2: 'mouth2.jpg', mouth3: 'mouth3.jpg',
+    mouth4: 'mouth4.jpg', mouth5: 'mouth5.jpg', mouth6: 'mouth6.jpg', mouth7: 'mouth7.jpg'
+  };
+  var IMG = {}, loaded = 0, total = 0;
+  for (var k in SRC) { total++; IMG[k] = new Image(); IMG[k].onload = function(){ loaded++; }; IMG[k].src = SRC[k]; }
+
+  var current = 'base', prev = null, fade = 1;
+  var speaking = false, exprNow = 'base', playingIdx = -1;
+  function show(name){
+    if (name === current) return;
+    prev = current; current = name; fade = 0;
+  }
+
+  // ---- メッシュ変形レンダラ ----
+  var COLS = 10, ROWS = 13;
+  function drawTri(img, sx0, sy0, sx1, sy1, sx2, sy2, dx0, dy0, dx1, dy1, dx2, dy2){
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(dx0, dy0); ctx.lineTo(dx1, dy1); ctx.lineTo(dx2, dy2);
+    ctx.closePath(); ctx.clip();
+    var denom = (sx1 - sx0) * (sy2 - sy0) - (sx2 - sx0) * (sy1 - sy0);
+    if (Math.abs(denom) < 0.001) { ctx.restore(); return; }
+    var a = ((dx1 - dx0) * (sy2 - sy0) - (dx2 - dx0) * (sy1 - sy0)) / denom;
+    var b = ((dx2 - dx0) * (sx1 - sx0) - (dx1 - dx0) * (sx2 - sx0)) / denom;
+    var c = ((dy1 - dy0) * (sy2 - sy0) - (dy2 - dy0) * (sy1 - sy0)) / denom;
+    var d = ((dy2 - dy0) * (sx1 - sx0) - (dy1 - dy0) * (sx2 - sx0)) / denom;
+    var e = dx0 - a * sx0 - b * sy0;
+    var f = dy0 - c * sx0 - d * sy0;
+    ctx.transform(a, c, b, d, e, f);
+    ctx.drawImage(img, 0, 0);
+    ctx.restore();
+  }
+  var voiceLevel = 0;
+  function warpPoint(x, y, t){
+    var yn = y / H;
+    var headW = Math.max(0, Math.min(1, (0.62 - yn) / 0.62)); // 頭部ほど大きく動く
+    headW = headW * headW;
+    var swayX = Math.sin(t * 0.6) * 4.5 * headW;
+    var tilt = Math.sin(t * 0.37) * 3.0 * headW;              // 首かしげ方向のずれ
+    var bobY = Math.cos(t * 0.83) * 2.0 * headW;
+    var breathe = Math.sin(t * 1.35) * 1.6 * yn;              // 呼吸は下半身側
+    var talk = voiceLevel * Math.sin(t * 26) * 1.4 * headW;   // 喋っている間の小さな揺れ
+    return [x + swayX + tilt * (yn - 0.35), y + bobY + breathe + talk];
+  }
+  function drawWarped(img, alpha, t){
+    ctx.globalAlpha = alpha;
+    var cw = W / COLS, ch = H / ROWS;
+    var pts = [];
+    for (var r = 0; r <= ROWS; r++) {
+      pts[r] = [];
+      for (var c = 0; c <= COLS; c++) pts[r][c] = warpPoint(c * cw, r * ch, t);
+    }
+    for (var r2 = 0; r2 < ROWS; r2++) {
+      for (var c2 = 0; c2 < COLS; c2++) {
+        var x0 = c2 * cw, y0 = r2 * ch;
+        var p00 = pts[r2][c2], p10 = pts[r2][c2 + 1], p01 = pts[r2 + 1][c2], p11 = pts[r2 + 1][c2 + 1];
+        drawTri(img, x0, y0, x0 + cw, y0, x0, y0 + ch, p00[0], p00[1], p10[0], p10[1], p01[0], p01[1]);
+        drawTri(img, x0 + cw, y0, x0 + cw, y0 + ch, x0, y0 + ch, p10[0], p10[1], p11[0], p11[1], p01[0], p01[1]);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+  function render(now){
+    var t = now / 1000;
+    ctx.clearRect(0, 0, W, H);
+    if (loaded >= total) {
+      if (prev && fade < 1) {
+        drawWarped(IMG[prev], 1, t);
+        fade = Math.min(1, fade + 0.18);
+        drawWarped(IMG[current], fade, t);
+        if (fade >= 1) prev = null;
+      } else {
+        drawWarped(IMG[current], 1, t);
+      }
+    }
+    requestAnimationFrame(render);
+  }
+  requestAnimationFrame(render);
+
+  // ---- 瞬き ----
+  function blinkLoop(){
+    var wait = 2200 + Math.random() * 2800;
+    setTimeout(function(){
+      if (!speaking) {
+        show('blink');
+        setTimeout(function(){ if (!speaking) show(exprNow); }, 170);
+      }
+      blinkLoop();
+    }, wait);
+  }
+  blinkLoop();
+
+  // ---- 台詞とボタン ----
+  var LINES = [
+    { label: 'ごあいさつ',       expr: 'smile', src: 'line1.mp3', text: 'いらっしゃいませ！ るべりえへようこそ。アシスタントのモコです。初めての方にも分かりやすいように、お店のことをご説明しますね。' },
+    { label: 'お店のこと',       expr: 'base',  src: 'line2.mp3', text: 'るべりえは、群馬県邑楽町にある創作ピザとスイーツのお店です。ピザの生地には、群馬県産の小麦を使っています。' },
+    { label: '注文の仕方',       expr: 'base',  src: 'line3.mp3', text: 'ご注文は、店内でのご注文のほか、お電話 0276-70-2321 でのご予約もできます。スマホからのモバイルオーダーもご利用いただけます。' },
+    { label: 'テイクアウト',     expr: 'base',  src: 'line4.mp3', text: 'テイクアウトのピザは、カットせずにお渡しするのが基本です。箱代は100円、4カットはご希望があれば対応します。紙皿とホイルは無料です。' },
+    { label: 'イートイン限定',   expr: 'base',  src: 'line5.mp3', text: 'メニューの中には、イートイン限定のものもあります。店内でのお食事も、是非ゆっくりお楽しみください。' },
+    { label: '冷凍ピザと自販機', expr: 'smile', src: 'line6.mp3', text: 'お店の外には、冷凍ピザの自動販売機もあります。コハクペイは自販機では使えませんが、営業時間内に店頭でお声がけいただければご利用いただけます。' },
+    { label: '営業時間',         expr: 'base',  src: 'line7.mp3', text: '営業時間は11:00から20:00まで、日曜日は18:00までです。木曜日が定休日です。' },
+    { label: '通販',             expr: 'smile', src: 'line8.mp3', text: '冷凍ピザは、STORESのネットショップから、全国への配送もできます。遠方の方への贈り物にもどうぞ。' }
+  ];
+  var audios = [], buttons = [];
+  for (var i = 0; i < LINES.length; i++) {
+    var a = new Audio(LINES[i].src);
+    a.preload = 'auto';
+    audios.push(a);
+    (function(idx){
+      var b = document.createElement('button');
+      b.textContent = LINES[idx].label;
+      b.addEventListener('click', function(){ tapTopic(idx); });
+      topicsEl.appendChild(b);
+      buttons.push(b);
+    })(i);
+  }
+
+  // ---- 口パク（8段階） ----
+  var actx = null, analyser = null, mouthRaf = null;
+  function initAudioGraph(){
+    if (actx) { if (actx.state === 'suspended') actx.resume(); return; }
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      actx = new AC();
+      analyser = actx.createAnalyser();
+      analyser.fftSize = 512;
+      for (var i = 0; i < audios.length; i++) actx.createMediaElementSource(audios[i]).connect(analyser);
+      analyser.connect(actx.destination);
+    } catch (e) { actx = null; analyser = null; }
+  }
+  var TIERS = [ [1, 5], [2, 6, 4, 7], [3, 2, 7] ];
+  var smoothLevel = 0, lastSwitch = 0, tierPos = [0, 0, 0], mouthStage = 0;
+  function pickStage(level){
+    if (level < 0.02) return 0;
+    var t = level < 0.06 ? 0 : (level < 0.13 ? 1 : 2);
+    var pool = TIERS[t];
+    tierPos[t] = (tierPos[t] + 1) % pool.length;
+    return pool[tierPos[t]];
+  }
+  function mouthLoop(){
+    if (!speaking) return;
+    if (analyser) {
+      var buf = new Uint8Array(analyser.fftSize);
+      analyser.getByteTimeDomainData(buf);
+      var sum = 0;
+      for (var i = 0; i < buf.length; i++) { var d = (buf[i] - 128) / 128; sum += d * d; }
+      var rms = Math.sqrt(sum / buf.length);
+      smoothLevel = smoothLevel * 0.55 + rms * 0.45;
+      voiceLevel = smoothLevel;
+      var now = performance.now();
+      if (now - lastSwitch >= 120) {
+        var st = pickStage(smoothLevel);
+        if (st !== mouthStage) {
+          mouthStage = st;
+          lastSwitch = now;
+          show(st === 0 ? 'base' : 'mouth' + st);
+        }
+      }
+    }
+    mouthRaf = requestAnimationFrame(mouthLoop);
+  }
+  var fallbackSeq = [1, 2, 5, 6, 3, 7, 4, 2], fallbackPos = 0;
+  function startMouth(){
+    if (analyser) { mouthLoop(); }
+    else {
+      mouthRaf = setInterval(function(){
+        fallbackPos = (fallbackPos + 1) % fallbackSeq.length;
+        show('mouth' + fallbackSeq[fallbackPos]);
+      }, 150);
+    }
+  }
+  function stopMouth(){
+    if (mouthRaf) { cancelAnimationFrame(mouthRaf); clearInterval(mouthRaf); mouthRaf = null; }
+    mouthStage = 0; voiceLevel = 0;
+  }
+  function setPlaying(idx){
+    playingIdx = idx;
+    for (var i = 0; i < buttons.length; i++) {
+      if (i === idx) buttons[i].classList.add('playing'); else buttons[i].classList.remove('playing');
+    }
+  }
+  function stopAll(){
+    speaking = false;
+    for (var i = 0; i < audios.length; i++) { try { audios[i].pause(); } catch (e) {} }
+    stopMouth();
+    exprNow = 'base';
+    show('base');
+    setPlaying(-1);
+  }
+  function tapTopic(idx){
+    initAudioGraph();
+    if (speaking && playingIdx === idx) { stopAll(); return; }
+    for (var i = 0; i < audios.length; i++) { try { audios[i].pause(); } catch (e) {} }
+    stopMouth();
+    speaking = true;
+    setPlaying(idx);
+    var L = LINES[idx];
+    exprNow = L.expr;
+    show(exprNow);
+    lineEl.classList.remove('idle');
+    lineEl.textContent = L.text;
+    var a = audios[idx];
+    a.currentTime = 0;
+    a.onended = function(){
+      stopMouth();
+      speaking = false;
+      exprNow = 'base';
+      show('base');
+      setPlaying(-1);
+    };
+    a.onerror = function(){
+      stopMouth();
+      speaking = false;
+      show(exprNow);
+      setPlaying(-1);
+    };
+    var p = a.play();
+    if (p && p.catch) p.catch(function(){ stopMouth(); speaking = false; setPlaying(-1); });
+    startMouth();
+  }
+  document.addEventListener('visibilitychange', function(){
+    if (document.hidden) stopAll();
+  });
+})();
+</script>
+</body>
+</html>
