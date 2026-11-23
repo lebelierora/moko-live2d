@@ -74,11 +74,11 @@
 
   // ---- 画像素材（全部同じ顔の幾何で揃えた合成済み） ----
   var SRC = {
-    base: 'base.jpg', smile: 'smile.jpg',
+    base: 'base.jpg', blink: 'blink.jpg', smile: 'smile.jpg',
     mouth1: 'mouth1.jpg', mouth2: 'mouth2.jpg', mouth3: 'mouth3.jpg',
     mouth4: 'mouth4.jpg', mouth5: 'mouth5.jpg', mouth6: 'mouth6.jpg', mouth7: 'mouth7.jpg'
   };
-  var IMG = {}, loaded = 0, total = 0, skinDone = false;
+  var IMG = {}, loaded = 0, total = 0;
   for (var k in SRC) { total++; IMG[k] = new Image(); IMG[k].onload = function(){ loaded++; }; IMG[k].src = SRC[k]; }
 
   var current = 'base', prev = null, fade = 1;
@@ -117,12 +117,6 @@
     ctx.restore();
   }
   var voiceLevel = 0;
-  var blinkAmt = 0;
-  // 目の幾何（画像座標）：内側の目角・外側の目角・中心。元の絵の目の角度に合わせる
-  var EYES = [
-    { x1: 264, y1: 330, x2: 190, y2: 337, cx: 227, cy: 338, rx: 41, ry: 35 },
-    { x1: 307, y1: 313, x2: 389, y2: 299, cx: 348, cy: 306, rx: 43, ry: 37 }
-  ];
   function warpPoint(x, y, t){
     var yn = y / H;
     var headW = Math.max(0, Math.min(1, (0.62 - yn) / 0.62)); // 頭部ほど大きく動く
@@ -133,69 +127,6 @@
     var breathe = Math.sin(t * 1.35) * 1.6 * yn;              // 呼吸は下半身側
     var talk = voiceLevel * Math.sin(t * 26) * 1.4 * headW;   // 喋っている間の小さな揺れ
     return [x + swayX + tilt * (yn - 0.35), y + bobY + breathe + talk];
-  }
-  // 肌色を元絵から採取（額と頬の平均）。取れなければ既定色
-  var skinTop = '#f4d7ba', skinBot = '#eec39d';
-  function sampleSkin(){
-    try {
-      var oc = document.createElement('canvas');
-      oc.width = W; oc.height = H;
-      var octx = oc.getContext('2d');
-      octx.drawImage(IMG.base, 0, 0);
-      function avg(x, y, w, h){
-        var d = octx.getImageData(x, y, w, h).data;
-        var r = 0, g = 0, b = 0, n = 0;
-        for (var i = 0; i < d.length; i += 16) { r += d[i]; g += d[i + 1]; b += d[i + 2]; n++; }
-        return 'rgb(' + Math.round(r / n) + ',' + Math.round(g / n) + ',' + Math.round(b / n) + ')';
-      }
-      skinTop = avg(284, 230, 34, 22);
-      skinBot = avg(126, 424, 44, 30);
-    } catch (e) { /* 既定色のまま */ }
-  }
-  // 瞬き：目の領域を肌で覆い、まつ毛の線を元の目の角度で引く（別画像に差し替えない）
-  function drawLids(t){
-    if (blinkAmt <= 0) return;
-    for (var e = 0; e < 2; e++) {
-      var E = EYES[e];
-      var wp = warpPoint(E.cx, E.cy, t);
-      var ox = wp[0] - E.cx, oy = wp[1] - E.cy;
-      var ly1 = (E.cy - E.ry * 0.8) + (E.y1 - (E.cy - E.ry * 0.8)) * blinkAmt;
-      var ly2 = (E.cy - E.ry * 0.8) + (E.y2 - (E.cy - E.ry * 0.8)) * blinkAmt;
-      var ctrlY = Math.max(ly1, ly2) + 4 + 9 * blinkAmt;
-      ctx.save();
-      ctx.translate(ox, oy);
-      ctx.beginPath();
-      ctx.ellipse(E.cx, E.cy, E.rx + 3, E.ry + 3, 0, 0, Math.PI * 2);
-      ctx.clip();
-      var grad = ctx.createLinearGradient(0, E.cy - E.ry, 0, E.cy + E.ry);
-      grad.addColorStop(0, skinTop);
-      grad.addColorStop(1, skinBot);
-      ctx.fillStyle = grad;
-      ctx.fillRect(E.cx - E.rx - 4, E.cy - E.ry - 4, E.rx * 2 + 8, E.ry * 2 + 8);
-      ctx.restore();
-      ctx.save();
-      ctx.translate(ox, oy);
-      ctx.lineCap = 'round';
-      ctx.strokeStyle = 'rgba(190, 140, 100, 0.35)';
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.moveTo(E.x1, ly1 + 5);
-      ctx.quadraticCurveTo(E.cx, ctrlY + 5, E.x2, ly2 + 5);
-      ctx.stroke();
-      ctx.strokeStyle = 'rgba(120, 85, 60, 0.16)';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.moveTo(E.x1, ly1 - 9);
-      ctx.quadraticCurveTo(E.cx, ctrlY - 9, E.x2, ly2 - 9);
-      ctx.stroke();
-      ctx.strokeStyle = 'rgba(74, 50, 38, 0.92)';
-      ctx.lineWidth = 5;
-      ctx.beginPath();
-      ctx.moveTo(E.x1, ly1);
-      ctx.quadraticCurveTo(E.cx, ctrlY, E.x2, ly2);
-      ctx.stroke();
-      ctx.restore();
-    }
   }
   function drawWarped(img, alpha, t){
     ctx.globalAlpha = alpha;
@@ -215,17 +146,9 @@
     }
     ctx.globalAlpha = 1;
   }
-  var nextBlinkAt = 1800;
   function render(now){
     var t = now / 1000;
-    // 瞬きの進行（約0.19秒で閉じて開く）
-    if (now >= nextBlinkAt) {
-      var bp = (now - nextBlinkAt) / 190;
-      if (bp >= 1) { blinkAmt = 0; nextBlinkAt = now + 2400 + Math.random() * 2800; }
-      else blinkAmt = Math.sin(bp * Math.PI);
-    }
     ctx.clearRect(0, 0, W, H);
-    if (loaded >= total && !skinDone) { skinDone = true; sampleSkin(); }
     if (loaded >= total) {
       if (prev && fade < 1) {
         drawWarped(IMG[prev], 1, t);
@@ -235,11 +158,23 @@
       } else {
         drawWarped(IMG[current], 1, t);
       }
-      drawLids(t);
     }
     requestAnimationFrame(render);
   }
   requestAnimationFrame(render);
+
+  // ---- 瞬き ----
+  function blinkLoop(){
+    var wait = 2200 + Math.random() * 2800;
+    setTimeout(function(){
+      if (!speaking) {
+        show('blink');
+        setTimeout(function(){ if (!speaking) show(exprNow); }, 170);
+      }
+      blinkLoop();
+    }, wait);
+  }
+  blinkLoop();
 
   // ---- 台詞とボタン ----
   var LINES = [
