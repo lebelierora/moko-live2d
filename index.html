@@ -130,14 +130,14 @@
     var talk = voiceLevel * Math.sin(t * 26) * 1.4 * headW;   // 喋っている間の小さな揺れ
     var nx = x + swayX + tilt * (yn - 0.35);
     var ny = y + bobY + breathe + talk;
-    // 髪の遅れ揺れ：両サイドの髪の領域は、遅れて・少し大きく揺れる
-    var side = Math.max(0, Math.min(1, (Math.abs(x - 300) - 165) / 75));
+    // 髪の遅れ揺れ：両サイドの髪の領域は、遅れて・少し大きく揺れる（境目は広くなだらかに）
+    var side = Math.max(0, Math.min(1, (Math.abs(x - 300) - 150) / 110));
     var vBand = Math.max(0, Math.min(1, (y - 110) / 90)) * Math.max(0, Math.min(1, (660 - y) / 90));
     var hairW = side * vBand;
     if (hairW > 0) {
       var swayNow = Math.sin(t * 0.6) * 4.5;
-      nx += (hairLagX * 1.7 - swayNow) * hairW;
-      ny += Math.abs(hairLagX - swayNow) * 0.8 * hairW;
+      nx += (hairLagX * 1.35 - swayNow) * hairW;
+      ny += (hairLagX - swayNow) * 0.25 * hairW;
     }
     // うなずき：頭部が沈み、わずかに中心へ寄る
     if (nodAmt > 0) {
@@ -164,10 +164,13 @@
     }
     ctx.globalAlpha = 1;
   }
+  var lastNow = 0;
   function render(now){
     var t = now / 1000;
-    // 髪の遅れ：頭の揺れへ少しずつ追いつく
-    hairLagX += (Math.sin(t * 0.6) * 4.5 - hairLagX) * 0.045;
+    // 髪の遅れ：フレームレートに依らない指数平滑で追いつく（カクつき防止）
+    var dt = lastNow ? Math.min(0.05, (now - lastNow) / 1000) : 0.016;
+    lastNow = now;
+    hairLagX += (Math.sin(t * 0.6) * 4.5 - hairLagX) * (1 - Math.exp(-dt / 0.38));
     // うなずきの進行（約0.85秒）
     if (nodStartAt > 0) {
       var np = (now - nodStartAt) / 850;
