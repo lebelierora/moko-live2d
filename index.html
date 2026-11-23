@@ -91,6 +91,15 @@
   // ---- メッシュ変形レンダラ ----
   var COLS = 10, ROWS = 13;
   function drawTri(img, sx0, sy0, sx1, sy1, sx2, sy2, dx0, dy0, dx1, dy1, dx2, dy2){
+    // タイルの継ぎ目消し：宛先三角形を重心から少しだけ広げて隣と重ねる
+    var cx = (dx0 + dx1 + dx2) / 3, cy = (dy0 + dy1 + dy2) / 3;
+    var ex = [dx0, dx1, dx2], ey = [dy0, dy1, dy2];
+    for (var i = 0; i < 3; i++) {
+      var vx = ex[i] - cx, vy = ey[i] - cy;
+      var len = Math.sqrt(vx * vx + vy * vy);
+      if (len > 0.01) { ex[i] += vx / len * 0.9; ey[i] += vy / len * 0.9; }
+    }
+    dx0 = ex[0]; dy0 = ey[0]; dx1 = ex[1]; dy1 = ey[1]; dx2 = ex[2]; dy2 = ey[2];
     ctx.save();
     ctx.beginPath();
     ctx.moveTo(dx0, dy0); ctx.lineTo(dx1, dy1); ctx.lineTo(dx2, dy2);
