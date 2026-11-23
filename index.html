@@ -117,6 +117,8 @@
     ctx.restore();
   }
   var voiceLevel = 0;
+  var hairLagX = 0;                 // 髪の遅れ揺れ（頭の揺れに遅れてついてくる値）
+  var nodAmt = 0, nodStartAt = -1;  // うなずき
   function warpPoint(x, y, t){
     var yn = y / H;
     var headW = Math.max(0, Math.min(1, (0.62 - yn) / 0.62)); // 頭部ほど大きく動く
@@ -126,7 +128,22 @@
     var bobY = Math.cos(t * 0.83) * 2.0 * headW;
     var breathe = Math.sin(t * 1.35) * 1.6 * yn;              // 呼吸は下半身側
     var talk = voiceLevel * Math.sin(t * 26) * 1.4 * headW;   // 喋っている間の小さな揺れ
-    return [x + swayX + tilt * (yn - 0.35), y + bobY + breathe + talk];
+    var nx = x + swayX + tilt * (yn - 0.35);
+    var ny = y + bobY + breathe + talk;
+    // 髪の遅れ揺れ：両サイドの髪の領域だけ、頭より遅れた揺れを足す
+    var side = Math.max(0, Math.min(1, (Math.abs(x - 300) - 165) / 75));
+    var vBand = Math.max(0, Math.min(1, (y - 110) / 90)) * Math.max(0, Math.min(1, (660 - y) / 90));
+    var hairW = side * vBand;
+    if (hairW > 0) {
+      nx += (hairLagX - Math.sin(t * 0.6) * 4.5) * 1.15 * hairW;
+      ny += Math.abs(hairLagX - Math.sin(t * 0.6) * 4.5) * 0.35 * hairW;
+    }
+    // うなずき：頭部が小さく沈み、わずかに中心へ寄る
+    if (nodAmt > 0) {
+      ny += nodAmt * 8 * headW;
+      nx += (300 - x) * nodAmt * 0.014 * headW;
+    }
+    return [nx, ny];
   }
   function drawWarped(img, alpha, t){
     ctx.globalAlpha = alpha;
@@ -148,6 +165,14 @@
   }
   function render(now){
     var t = now / 1000;
+    // 髪の遅れ：頭の揺れへ少しずつ追いつく
+    hairLagX += (Math.sin(t * 0.6) * 4.5 - hairLagX) * 0.045;
+    // うなずきの進行（約0.7秒）
+    if (nodStartAt > 0) {
+      var np = (now - nodStartAt) / 700;
+      if (np >= 1) { nodAmt = 0; nodStartAt = -1; }
+      else nodAmt = Math.sin(np * Math.PI);
+    }
     ctx.clearRect(0, 0, W, H);
     if (loaded >= total) {
       if (prev && fade < 1) {
@@ -287,12 +312,14 @@
     lineEl.textContent = L.text;
     var a = audios[idx];
     a.currentTime = 0;
+    nodStartAt = performance.now();
     a.onended = function(){
       stopMouth();
       speaking = false;
       exprNow = 'base';
       show('base');
       setPlaying(-1);
+      nodStartAt = performance.now();
     };
     a.onerror = function(){
       stopMouth();
