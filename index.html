@@ -77,7 +77,8 @@
   var SRC = {
     base: 'base.jpg', blink: 'blink.jpg', smile: 'smile.jpg',
     mouth1: 'mouth1.jpg', mouth2: 'mouth2.jpg', mouth3: 'mouth3.jpg',
-    mouth4: 'mouth4.jpg', mouth5: 'mouth5.jpg', mouth6: 'mouth6.jpg', mouth7: 'mouth7.jpg'
+    mouth4: 'mouth4.jpg', mouth5: 'mouth5.jpg', mouth6: 'mouth6.jpg', mouth7: 'mouth7.jpg',
+    smile1: 'smile1.jpg', smile2: 'smile2.jpg', smile3: 'smile3.jpg', smile4: 'smile4.jpg'
   };
   var IMG = {}, loaded = 0, total = 0;
   for (var k in SRC) { total++; IMG[k] = new Image(); IMG[k].onload = function(){ loaded++; }; IMG[k].src = SRC[k]; }
@@ -245,13 +246,25 @@
     } catch (e) { actx = null; analyser = null; }
   }
   var TIERS = [ [1, 5], [2, 6, 4, 7], [3, 2, 7] ];
-  var smoothLevel = 0, lastSwitch = 0, tierPos = [0, 0, 0], mouthStage = 0;
+  var SMILE_TIERS = [ [1, 4], [2, 4, 1], [3, 2] ];
+  var smoothLevel = 0, lastSwitch = 0, tierPos = [0, 0, 0], smileTierPos = [0, 0, 0], mouthStage = 0;
   function pickStage(level){
     if (level < 0.02) return 0;
     var t = level < 0.06 ? 0 : (level < 0.13 ? 1 : 2);
     var pool = TIERS[t];
     tierPos[t] = (tierPos[t] + 1) % pool.length;
     return pool[tierPos[t]];
+  }
+  function pickSmileStage(level){
+    if (level < 0.02) return 0;
+    var t = level < 0.06 ? 0 : (level < 0.13 ? 1 : 2);
+    var pool = SMILE_TIERS[t];
+    smileTierPos[t] = (smileTierPos[t] + 1) % pool.length;
+    return pool[smileTierPos[t]];
+  }
+  function mouthImage(st){
+    if (st === 0) return exprNow;
+    return exprNow === 'smile' ? 'smile' + st : 'mouth' + st;
   }
   function mouthLoop(){
     if (!speaking) return;
@@ -265,23 +278,29 @@
       voiceLevel = smoothLevel;
       var now = performance.now();
       if (now - lastSwitch >= 120) {
-        var st = pickStage(smoothLevel);
+        var st = exprNow === 'smile' ? pickSmileStage(smoothLevel) : pickStage(smoothLevel);
         if (st !== mouthStage) {
           mouthStage = st;
           lastSwitch = now;
-          show(st === 0 ? 'base' : 'mouth' + st);
+          show(mouthImage(st));
         }
       }
     }
     mouthRaf = requestAnimationFrame(mouthLoop);
   }
   var fallbackSeq = [1, 2, 5, 6, 3, 7, 4, 2], fallbackPos = 0;
+  var smileFallbackSeq = [1, 2, 4, 3, 2, 1], smileFallbackPos = 0;
   function startMouth(){
     if (analyser) { mouthLoop(); }
     else {
       mouthRaf = setInterval(function(){
-        fallbackPos = (fallbackPos + 1) % fallbackSeq.length;
-        show('mouth' + fallbackSeq[fallbackPos]);
+        if (exprNow === 'smile') {
+          smileFallbackPos = (smileFallbackPos + 1) % smileFallbackSeq.length;
+          show('smile' + smileFallbackSeq[smileFallbackPos]);
+        } else {
+          fallbackPos = (fallbackPos + 1) % fallbackSeq.length;
+          show('mouth' + fallbackSeq[fallbackPos]);
+        }
       }, 150);
     }
   }
